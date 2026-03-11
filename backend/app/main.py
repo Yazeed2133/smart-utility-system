@@ -2,14 +2,19 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import Base, engine, get_db
-from app.models import User, Account, Meter, Reading, Bill
+
+
+from app.models import User, Account, Meter, Reading, Bill, Payment
 from app.schemas import (
     UserCreate, UserUpdate, UserResponse,
     AccountCreate, AccountUpdate, AccountResponse,
     MeterCreate, MeterUpdate, MeterResponse,
     ReadingCreate, ReadingUpdate, ReadingResponse,
-    BillCreate, BillUpdate, BillResponse
+    BillCreate, BillUpdate, BillResponse,
+    PaymentCreate, PaymentUpdate, PaymentResponse
 )
+
+
 app = FastAPI()
 
 Base.metadata.create_all(bind=engine)
@@ -373,3 +378,85 @@ def delete_bill(bill_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"message": "Bill deleted successfully"}
+
+
+@app.post("/payments", response_model=PaymentResponse)
+def create_payment(payment: PaymentCreate, db: Session = Depends(get_db)):
+    bill = db.query(Bill).filter(Bill.id == payment.bill_id).first()
+
+    if bill is None:
+        raise HTTPException(status_code=404, detail="Bill not found")
+
+    new_payment = Payment(
+        amount=payment.amount,
+        payment_method=payment.payment_method,
+        payment_status=payment.payment_status,
+        transaction_ref=payment.transaction_ref,
+        bill_id=payment.bill_id
+    )
+
+    db.add(new_payment)
+
+    if payment.payment_status == "completed":
+        bill.status = "paid"
+
+    db.commit()
+    db.refresh(new_payment)
+
+    return new_payment
+
+@app.get("/payments", response_model=list[PaymentResponse])
+def get_payments(db: Session = Depends(get_db)):
+    payments = db.query(Payment).all()
+    return payments
+
+
+@app.get("/payments/{payment_id}", response_model=PaymentResponse)
+def get_payment(payment_id: int, db: Session = Depends(get_db)):
+    payment = db.query(Payment).filter(Payment.id == payment_id).first()
+
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    return payment
+
+
+@app.put("/payments/{payment_id}", response_model=PaymentResponse)
+def update_payment(payment_id: int, payment_data: PaymentUpdate, db: Session = Depends(get_db)):
+    payment = db.query(Payment).filter(Payment.id == payment_id).first()
+
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    bill = db.query(Bill).filter(Bill.id == payment_data.bill_id).first()
+    if bill is None:
+        raise HTTPException(status_code=404, detail="Bill not found")
+
+    payment.amount = payment_data.amount
+    payment.payment_method = payment_data.payment_method
+    payment.payment_status = payment_data.payment_status
+    payment.transaction_ref = payment_data.transaction_ref
+    payment.bill_id = payment_data.bill_id
+
+    if payment_data.payment_status == "completed":
+        bill.status = "paid"
+    else:
+        bill.status = "unpaid"
+
+    db.commit()
+    db.refresh(payment)
+
+    return payment
+
+
+@app.delete("/payments/{payment_id}")
+def delete_payment(payment_id: int, db: Session = Depends(get_db)):
+    payment = db.query(Payment).filter(Payment.id == payment_id).first()
+
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    db.delete(payment)
+    db.commit()
+
+    return {"message": "Payment deleted successfully"}
