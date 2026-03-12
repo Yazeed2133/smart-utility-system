@@ -3,20 +3,24 @@ from datetime import datetime
 
 
 class ReadingCreate(BaseModel):
-    reading_value: float
     meter_id: int
+    reading_value: float
+    reading_date: datetime
 
 
 class ReadingUpdate(BaseModel):
-    reading_value: float
     meter_id: int
+    reading_value: float
+    reading_date: datetime
 
 
 class ReadingResponse(BaseModel):
     id: int
+    meter_id: int
     reading_value: float
     reading_date: datetime
-    meter_id: int
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True

@@ -1,26 +1,29 @@
 from pydantic import BaseModel
+from datetime import datetime
 
 
 class AccountCreate(BaseModel):
-    account_number: str
-    address: str
-    status: str = "active"
     user_id: int
+    account_number: str
+    account_type: str
+    balance: float
 
 
 class AccountUpdate(BaseModel):
-    account_number: str
-    address: str
-    status: str = "active"
     user_id: int
+    account_number: str
+    account_type: str
+    balance: float
 
 
 class AccountResponse(BaseModel):
     id: int
-    account_number: str
-    address: str
-    status: str
     user_id: int
+    account_number: str
+    account_type: str
+    balance: float
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True

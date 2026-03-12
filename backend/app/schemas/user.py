@@ -1,28 +1,23 @@
 from pydantic import BaseModel, EmailStr
+from datetime import datetime
 
 
 class UserCreate(BaseModel):
-    full_name: str
+    name: str
     email: EmailStr
-    phone: str | None = None
-    password: str
-    role: str = "customer"
 
 
 class UserUpdate(BaseModel):
-    full_name: str
+    name: str
     email: EmailStr
-    phone: str | None = None
-    password: str
-    role: str = "customer"
 
 
 class UserResponse(BaseModel):
     id: int
-    full_name: str
+    name: str
     email: EmailStr
-    phone: str | None = None
-    role: str
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True

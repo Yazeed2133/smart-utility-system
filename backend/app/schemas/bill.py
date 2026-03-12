@@ -1,37 +1,36 @@
 from pydantic import BaseModel
 from datetime import datetime
+from enum import Enum
+
+
+class BillStatus(str, Enum):
+    pending = "pending"
+    paid = "paid"
+    overdue = "overdue"
 
 
 class BillCreate(BaseModel):
-    billing_month: str
-    electricity_amount: float = 0.0
-    water_amount: float = 0.0
-    total_amount: float
-    status: str = "unpaid"
-    due_date: datetime
     account_id: int
+    amount: float
+    due_date: datetime
+    status: BillStatus
 
 
 class BillUpdate(BaseModel):
-    billing_month: str
-    electricity_amount: float = 0.0
-    water_amount: float = 0.0
-    total_amount: float
-    status: str = "unpaid"
-    due_date: datetime
     account_id: int
+    amount: float
+    due_date: datetime
+    status: BillStatus
 
 
 class BillResponse(BaseModel):
     id: int
-    billing_month: str
-    electricity_amount: float
-    water_amount: float
-    total_amount: float
-    status: str
-    due_date: datetime
-    created_at: datetime
     account_id: int
+    amount: float
+    due_date: datetime
+    status: BillStatus
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True
