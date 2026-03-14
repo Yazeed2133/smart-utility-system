@@ -1,41 +1,55 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
 
 from app.dependencies import get_db
+from app.dependencies_auth import require_admin
 from app.models.user import User
-from app.schemas.user import UserCreate, UserUpdate, UserResponse
-from app.schemas.common import MessageResponse, PaginatedResponse
+from app.schemas import MessageResponse, PaginatedResponse
+from app.schemas.user import UserCreate, UserResponse, UserUpdate
+from app.security import hash_password
 from app.utils import get_object_or_404
 
-router = APIRouter(
-    prefix="/users",
-    tags=["Users"]
+router = APIRouter()
+
+
+@router.post(
+    "/",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_admin)],
 )
-
-
-@router.post("/", response_model=UserResponse)
-def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.email == user.email).first()
+def create_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    existing_user = db.query(User).filter(User.email == user_in.email).first()
     if existing_user:
-        raise HTTPException(status_code=400, detail="Email already exists")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
 
     new_user = User(
-        name=user.name,
-        email=user.email
+        name=user_in.name,
+        email=user_in.email,
+        password_hash=hash_password(user_in.password),
+        role="user",
     )
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
     return new_user
 
 
-@router.get("/", response_model=PaginatedResponse[UserResponse])
-def get_users(
-    search: str | None = Query(None),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db)
+@router.get(
+    "/",
+    response_model=PaginatedResponse[UserResponse],
+    dependencies=[Depends(require_admin)],
+)
+def list_users(
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = Query(10, le=100),
+    search: str | None = None,
 ):
     query = db.query(User)
 
@@ -43,51 +57,77 @@ def get_users(
         query = query.filter(
             or_(
                 User.name.ilike(f"%{search}%"),
-                User.email.ilike(f"%{search}%")
+                User.email.ilike(f"%{search}%"),
+                User.role.ilike(f"%{search}%"),
             )
         )
 
-    total = query.count()
-    items = query.order_by(User.id.desc()).offset(skip).limit(limit).all()
+    total = query.with_entities(func.count(User.id)).scalar() or 0
+    items = query.order_by(desc(User.created_at)).offset(skip).limit(limit).all()
 
-    return {
-        "total": total,
-        "items": items
-    }
+    return PaginatedResponse[UserResponse](
+        total=total,
+        skip=skip,
+        limit=limit,
+        items=items,
+    )
 
 
-@router.get("/{user_id}", response_model=UserResponse)
+@router.get(
+    "/{user_id}",
+    response_model=UserResponse,
+    dependencies=[Depends(require_admin)],
+)
 def get_user(user_id: int, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == user_id).first()
-    user = get_object_or_404(user, "User not found")
+    user = get_object_or_404(db, User, user_id)
     return user
 
 
-@router.put("/{user_id}", response_model=UserResponse)
-def update_user(user_id: int, user_data: UserUpdate, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == user_id).first()
-    user = get_object_or_404(user, "User not found")
+@router.put(
+    "/{user_id}",
+    response_model=UserResponse,
+    dependencies=[Depends(require_admin)],
+)
+def update_user(user_id: int, user_in: UserUpdate, db: Session = Depends(get_db)):
+    user = get_object_or_404(db, User, user_id)
 
-    existing_user = db.query(User).filter(
-        User.email == user_data.email,
-        User.id != user_id
-    ).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already exists")
+    if user_in.email and user_in.email != user.email:
+        existing_user = db.query(User).filter(User.email == user_in.email).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered",
+            )
 
-    user.name = user_data.name
-    user.email = user_data.email
+    if user_in.name is not None:
+        user.name = user_in.name
+
+    if user_in.email is not None:
+        user.email = user_in.email
+
+    if user_in.password is not None:
+        user.password_hash = hash_password(user_in.password)
+
+    if user_in.role is not None:
+        if user_in.role not in ["admin", "user"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Role must be admin or user",
+            )
+        user.role = user_in.role
 
     db.commit()
     db.refresh(user)
     return user
 
 
-@router.delete("/{user_id}", response_model=MessageResponse)
+@router.delete(
+    "/{user_id}",
+    response_model=MessageResponse,
+    dependencies=[Depends(require_admin)],
+)
 def delete_user(user_id: int, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == user_id).first()
-    user = get_object_or_404(user, "User not found")
-
+    user = get_object_or_404(db, User, user_id)
     db.delete(user)
     db.commit()
-    return {"message": "User deleted successfully"}
+    return MessageResponse(message="User deleted successfully")
