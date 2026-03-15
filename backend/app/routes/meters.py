@@ -1,91 +1,160 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
-from app.models.meter import Meter
+from app.dependencies_auth import get_current_user
 from app.models.account import Account
-from app.schemas.meter import MeterCreate, MeterUpdate, MeterResponse
-from app.schemas.common import MessageResponse, PaginatedResponse
+from app.models.meter import Meter
+from app.models.user import User
+from app.schemas import MessageResponse, PaginatedResponse
+from app.schemas.meter import MeterCreate, MeterResponse, MeterUpdate
 from app.utils import get_object_or_404
 
-router = APIRouter(
-    prefix="/meters",
-    tags=["Meters"]
-)
+router = APIRouter()
 
 
-@router.post("/", response_model=MeterResponse)
-def create_meter(meter: MeterCreate, db: Session = Depends(get_db)):
-    account = db.query(Account).filter(Account.id == meter.account_id).first()
-    get_object_or_404(account, "Account not found")
+@router.post("/", response_model=MeterResponse, status_code=status.HTTP_201_CREATED)
+def create_meter(
+    meter_in: MeterCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    account = db.query(Account).filter(Account.id == meter_in.account_id).first()
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Account not found",
+        )
 
-    existing_meter = db.query(Meter).filter(
-        Meter.meter_number == meter.meter_number
-    ).first()
+    if current_user.role != "admin" and account.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to create meter for this account",
+        )
+
+    existing_meter = db.query(Meter).filter(Meter.meter_number == meter_in.meter_number).first()
     if existing_meter:
-        raise HTTPException(status_code=400, detail="Meter number already exists")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Meter number already exists",
+        )
 
-    new_meter = Meter(
-        account_id=meter.account_id,
-        meter_number=meter.meter_number,
-        meter_type=meter.meter_type,
-        location=meter.location,
-        installed_at=meter.installed_at
+    meter = Meter(
+        account_id=meter_in.account_id,
+        meter_number=meter_in.meter_number,
+        meter_type=meter_in.meter_type,
     )
-    db.add(new_meter)
+
+    db.add(meter)
     db.commit()
-    db.refresh(new_meter)
-    return new_meter
+    db.refresh(meter)
+    return meter
 
 
 @router.get("/", response_model=PaginatedResponse[MeterResponse])
-def get_meters(
-    account_id: int | None = Query(None),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db)
+def list_meters(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    skip: int = 0,
+    limit: int = Query(10, le=100),
+    account_id: Optional[int] = None,
+    meter_type: Optional[str] = None,
+    search: Optional[str] = None,
 ):
-    query = db.query(Meter)
+    query = db.query(Meter).join(Account, Meter.account_id == Account.id)
+
+    if current_user.role != "admin":
+        query = query.filter(Account.user_id == current_user.id)
 
     if account_id is not None:
         query = query.filter(Meter.account_id == account_id)
 
-    total = query.count()
-    items = query.order_by(Meter.id.desc()).offset(skip).limit(limit).all()
+    if meter_type:
+        query = query.filter(Meter.meter_type == meter_type)
 
-    return {
-        "total": total,
-        "items": items
-    }
+    if search:
+        query = query.filter(
+            or_(
+                Meter.meter_number.ilike(f"%{search}%"),
+                Meter.meter_type.ilike(f"%{search}%"),
+            )
+        )
+
+    total = query.with_entities(func.count(Meter.id)).scalar() or 0
+    items = query.order_by(desc(Meter.created_at)).offset(skip).limit(limit).all()
+
+    return PaginatedResponse[MeterResponse](
+        total=total,
+        skip=skip,
+        limit=limit,
+        items=items,
+    )
 
 
 @router.get("/{meter_id}", response_model=MeterResponse)
-def get_meter(meter_id: int, db: Session = Depends(get_db)):
-    meter = db.query(Meter).filter(Meter.id == meter_id).first()
-    meter = get_object_or_404(meter, "Meter not found")
+def get_meter(
+    meter_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    meter = get_object_or_404(db, Meter, meter_id)
+    account = get_object_or_404(db, Account, meter.account_id)
+
+    if current_user.role != "admin" and account.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to view this meter",
+        )
+
     return meter
 
 
 @router.put("/{meter_id}", response_model=MeterResponse)
-def update_meter(meter_id: int, meter_data: MeterUpdate, db: Session = Depends(get_db)):
-    meter = db.query(Meter).filter(Meter.id == meter_id).first()
-    meter = get_object_or_404(meter, "Meter not found")
+def update_meter(
+    meter_id: int,
+    meter_in: MeterUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    meter = get_object_or_404(db, Meter, meter_id)
+    current_account = get_object_or_404(db, Account, meter.account_id)
 
-    account = db.query(Account).filter(Account.id == meter_data.account_id).first()
-    get_object_or_404(account, "Account not found")
+    if current_user.role != "admin" and current_account.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to update this meter",
+        )
 
-    existing_meter = db.query(Meter).filter(
-        Meter.meter_number == meter_data.meter_number,
-        Meter.id != meter_id
-    ).first()
-    if existing_meter:
-        raise HTTPException(status_code=400, detail="Meter number already exists")
+    if meter_in.account_id is not None:
+        new_account = db.query(Account).filter(Account.id == meter_in.account_id).first()
+        if not new_account:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Account not found",
+            )
 
-    meter.account_id = meter_data.account_id
-    meter.meter_number = meter_data.meter_number
-    meter.meter_type = meter_data.meter_type
-    meter.location = meter_data.location
-    meter.installed_at = meter_data.installed_at
+        if current_user.role != "admin" and new_account.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not allowed to move meter to this account",
+            )
+
+        meter.account_id = meter_in.account_id
+
+    if meter_in.meter_number is not None and meter_in.meter_number != meter.meter_number:
+        existing_meter = db.query(Meter).filter(Meter.meter_number == meter_in.meter_number).first()
+        if existing_meter:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Meter number already exists",
+            )
+        meter.meter_number = meter_in.meter_number
+
+    if meter_in.meter_type is not None:
+        meter.meter_type = meter_in.meter_type
 
     db.commit()
     db.refresh(meter)
@@ -93,10 +162,20 @@ def update_meter(meter_id: int, meter_data: MeterUpdate, db: Session = Depends(g
 
 
 @router.delete("/{meter_id}", response_model=MessageResponse)
-def delete_meter(meter_id: int, db: Session = Depends(get_db)):
-    meter = db.query(Meter).filter(Meter.id == meter_id).first()
-    meter = get_object_or_404(meter, "Meter not found")
+def delete_meter(
+    meter_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    meter = get_object_or_404(db, Meter, meter_id)
+    account = get_object_or_404(db, Account, meter.account_id)
+
+    if current_user.role != "admin" and account.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to delete this meter",
+        )
 
     db.delete(meter)
     db.commit()
-    return {"message": "Meter deleted successfully"}
+    return MessageResponse(message="Meter deleted successfully")

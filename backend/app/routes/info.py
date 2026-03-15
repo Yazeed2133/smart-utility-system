@@ -2,16 +2,17 @@ from fastapi import APIRouter
 
 from app.config import settings
 
-router = APIRouter(
-    prefix="/info",
-    tags=["Info"]
-)
+router = APIRouter()
 
 
 @router.get("/")
 def get_info():
     return {
-        "app_name": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "database_url": settings.DATABASE_URL
+        "app_name": settings.app_name,
+        "version": settings.app_version,
+        "description": settings.app_description,
+        "contact": {
+            "name": settings.contact_name,
+            "email": str(settings.contact_email),
+        },
     }

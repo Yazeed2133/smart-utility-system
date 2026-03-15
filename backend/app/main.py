@@ -7,7 +7,15 @@ from app.routes.api_router import api_router
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title=settings.app_name)
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.app_version,
+    description=settings.app_description,
+    contact={
+        "name": settings.contact_name,
+        "email": str(settings.contact_email),
+    },
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,5 +36,9 @@ app.include_router(api_router)
 @app.get("/")
 def health_check():
     return {
-        "message": f"{settings.app_name} is running"
+        "app_name": settings.app_name,
+        "version": settings.app_version,
+        "status": "running",
+        "docs_url": "/docs",
+        "api_prefix": "/api/v1",
     }

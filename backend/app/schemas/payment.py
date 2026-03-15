@@ -1,36 +1,30 @@
-from pydantic import BaseModel
-from datetime import datetime
-from enum import Enum
+from datetime import date, datetime
+from typing import Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class PaymentMethod(str, Enum):
-    cash = "cash"
-    card = "card"
-    bank_transfer = "bank_transfer"
-
-
-class PaymentCreate(BaseModel):
+class PaymentBase(BaseModel):
     bill_id: int
-    amount_paid: float
-    payment_date: datetime
-    payment_method: PaymentMethod
+    amount: float = Field(gt=0)
+    payment_method: Literal["cash", "card", "bank_transfer"]
+    payment_date: date
+
+
+class PaymentCreate(PaymentBase):
+    pass
 
 
 class PaymentUpdate(BaseModel):
-    bill_id: int
-    amount_paid: float
-    payment_date: datetime
-    payment_method: PaymentMethod
+    bill_id: Optional[int] = None
+    amount: Optional[float] = Field(default=None, gt=0)
+    payment_method: Optional[Literal["cash", "card", "bank_transfer"]] = None
+    payment_date: Optional[date] = None
 
 
-class PaymentResponse(BaseModel):
+class PaymentResponse(PaymentBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
-    bill_id: int
-    amount_paid: float
-    payment_date: datetime
-    payment_method: PaymentMethod
     created_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True

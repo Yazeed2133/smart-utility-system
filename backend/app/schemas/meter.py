@@ -1,32 +1,28 @@
-from pydantic import BaseModel
 from datetime import datetime
+from typing import Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class MeterCreate(BaseModel):
+class MeterBase(BaseModel):
     account_id: int
-    meter_number: str
-    meter_type: str
-    location: str
-    installed_at: datetime
+    meter_number: str = Field(min_length=3, max_length=50)
+    meter_type: Literal["electricity", "water", "gas"]
+
+
+class MeterCreate(MeterBase):
+    pass
 
 
 class MeterUpdate(BaseModel):
-    account_id: int
-    meter_number: str
-    meter_type: str
-    location: str
-    installed_at: datetime
+    account_id: Optional[int] = None
+    meter_number: Optional[str] = Field(default=None, min_length=3, max_length=50)
+    meter_type: Optional[Literal["electricity", "water", "gas"]] = None
 
 
-class MeterResponse(BaseModel):
+class MeterResponse(MeterBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
-    account_id: int
-    meter_number: str
-    meter_type: str
-    location: str
-    installed_at: datetime
     created_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True

@@ -13,6 +13,19 @@ from app.utils import get_object_or_404
 router = APIRouter()
 
 
+@router.get("/summary", dependencies=[Depends(require_admin)])
+def get_users_summary(db: Session = Depends(get_db)):
+    total_users = db.query(func.count(User.id)).scalar() or 0
+    total_admins = db.query(func.count(User.id)).filter(User.role == "admin").scalar() or 0
+    total_normal_users = db.query(func.count(User.id)).filter(User.role == "user").scalar() or 0
+
+    return {
+        "total_users": total_users,
+        "total_admins": total_admins,
+        "total_normal_users": total_normal_users,
+    }
+
+
 @router.post(
     "/",
     response_model=UserResponse,

@@ -1,26 +1,28 @@
-from pydantic import BaseModel
-from datetime import datetime
+from datetime import date, datetime
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class ReadingCreate(BaseModel):
+class ReadingBase(BaseModel):
     meter_id: int
-    reading_value: float
-    reading_date: datetime
+    reading_value: float = Field(gt=0)
+    reading_date: date
+
+
+class ReadingCreate(ReadingBase):
+    pass
 
 
 class ReadingUpdate(BaseModel):
-    meter_id: int
-    reading_value: float
-    reading_date: datetime
+    meter_id: Optional[int] = None
+    reading_value: Optional[float] = Field(default=None, gt=0)
+    reading_date: Optional[date] = None
 
 
-class ReadingResponse(BaseModel):
+class ReadingResponse(ReadingBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
-    meter_id: int
-    reading_value: float
-    reading_date: datetime
     created_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True

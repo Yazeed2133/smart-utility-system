@@ -1,93 +1,157 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
+from app.dependencies_auth import get_current_user
 from app.models.account import Account
 from app.models.user import User
-from app.schemas.account import AccountCreate, AccountUpdate, AccountResponse
-from app.schemas.common import MessageResponse, PaginatedResponse
+from app.schemas import MessageResponse, PaginatedResponse
+from app.schemas.account import AccountCreate, AccountResponse, AccountUpdate
 from app.utils import get_object_or_404
 
-router = APIRouter(
-    prefix="/accounts",
-    tags=["Accounts"]
-)
+router = APIRouter()
 
 
-@router.post("/", response_model=AccountResponse)
-def create_account(account: AccountCreate, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == account.user_id).first()
-    get_object_or_404(user, "User not found")
+@router.post("/", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
+def create_account(
+    account_in: AccountCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    user = db.query(User).filter(User.id == account_in.user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User not found",
+        )
 
-    existing_account = db.query(Account).filter(
-        Account.account_number == account.account_number
-    ).first()
+    if current_user.role != "admin" and account_in.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only create accounts for yourself",
+        )
+
+    existing_account = db.query(Account).filter(Account.account_number == account_in.account_number).first()
     if existing_account:
-        raise HTTPException(status_code=400, detail="Account number already exists")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Account number already exists",
+        )
 
-    new_account = Account(
-        user_id=account.user_id,
-        account_number=account.account_number,
-        account_type=account.account_type,
-        balance=account.balance
+    account = Account(
+        user_id=account_in.user_id,
+        account_number=account_in.account_number,
+        account_type=account_in.account_type,
+        address=account_in.address,
     )
-    db.add(new_account)
+
+    db.add(account)
     db.commit()
-    db.refresh(new_account)
-    return new_account
+    db.refresh(account)
+    return account
 
 
 @router.get("/", response_model=PaginatedResponse[AccountResponse])
-def get_accounts(
-    search: str | None = Query(None),
-    user_id: int | None = Query(None),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db)
+def list_accounts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    skip: int = 0,
+    limit: int = Query(10, le=100),
+    search: Optional[str] = None,
+    user_id: Optional[int] = None,
 ):
     query = db.query(Account)
 
-    if search:
-        query = query.filter(Account.account_number.ilike(f"%{search}%"))
-
-    if user_id is not None:
+    if current_user.role != "admin":
+        query = query.filter(Account.user_id == current_user.id)
+    elif user_id is not None:
         query = query.filter(Account.user_id == user_id)
 
-    total = query.count()
-    items = query.order_by(Account.id.desc()).offset(skip).limit(limit).all()
+    if search:
+        query = query.filter(
+            or_(
+                Account.account_number.ilike(f"%{search}%"),
+                Account.account_type.ilike(f"%{search}%"),
+                Account.address.ilike(f"%{search}%"),
+            )
+        )
 
-    return {
-        "total": total,
-        "items": items
-    }
+    total = query.with_entities(func.count(Account.id)).scalar() or 0
+    items = query.order_by(desc(Account.created_at)).offset(skip).limit(limit).all()
+
+    return PaginatedResponse[AccountResponse](
+        total=total,
+        skip=skip,
+        limit=limit,
+        items=items,
+    )
 
 
 @router.get("/{account_id}", response_model=AccountResponse)
-def get_account(account_id: int, db: Session = Depends(get_db)):
-    account = db.query(Account).filter(Account.id == account_id).first()
-    account = get_object_or_404(account, "Account not found")
+def get_account(
+    account_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    account = get_object_or_404(db, Account, account_id)
+
+    if current_user.role != "admin" and account.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to view this account",
+        )
+
     return account
 
 
 @router.put("/{account_id}", response_model=AccountResponse)
-def update_account(account_id: int, account_data: AccountUpdate, db: Session = Depends(get_db)):
-    account = db.query(Account).filter(Account.id == account_id).first()
-    account = get_object_or_404(account, "Account not found")
+def update_account(
+    account_id: int,
+    account_in: AccountUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    account = get_object_or_404(db, Account, account_id)
 
-    user = db.query(User).filter(User.id == account_data.user_id).first()
-    get_object_or_404(user, "User not found")
+    if current_user.role != "admin" and account.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to update this account",
+        )
 
-    existing_account = db.query(Account).filter(
-        Account.account_number == account_data.account_number,
-        Account.id != account_id
-    ).first()
-    if existing_account:
-        raise HTTPException(status_code=400, detail="Account number already exists")
+    if account_in.user_id is not None:
+        user = db.query(User).filter(User.id == account_in.user_id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User not found",
+            )
 
-    account.user_id = account_data.user_id
-    account.account_number = account_data.account_number
-    account.account_type = account_data.account_type
-    account.balance = account_data.balance
+        if current_user.role != "admin" and account_in.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only keep the account under yourself",
+            )
+
+        account.user_id = account_in.user_id
+
+    if account_in.account_number is not None and account_in.account_number != account.account_number:
+        existing_account = db.query(Account).filter(Account.account_number == account_in.account_number).first()
+        if existing_account:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Account number already exists",
+            )
+        account.account_number = account_in.account_number
+
+    if account_in.account_type is not None:
+        account.account_type = account_in.account_type
+
+    if account_in.address is not None:
+        account.address = account_in.address
 
     db.commit()
     db.refresh(account)
@@ -95,10 +159,19 @@ def update_account(account_id: int, account_data: AccountUpdate, db: Session = D
 
 
 @router.delete("/{account_id}", response_model=MessageResponse)
-def delete_account(account_id: int, db: Session = Depends(get_db)):
-    account = db.query(Account).filter(Account.id == account_id).first()
-    account = get_object_or_404(account, "Account not found")
+def delete_account(
+    account_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    account = get_object_or_404(db, Account, account_id)
+
+    if current_user.role != "admin" and account.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to delete this account",
+        )
 
     db.delete(account)
     db.commit()
-    return {"message": "Account deleted successfully"}
+    return MessageResponse(message="Account deleted successfully")
